@@ -517,7 +517,57 @@ textarea:focus { border-color: #1CB0F6; }
   55%  { transform: translate(-50%,-60%) scale(1.1); opacity: 1; }
   100% { transform: translate(-50%,-80%) scale(.9); opacity: 0; }
 }
+
+/* ══════════════════
+   GOOGLE / SUPABASE AUTH
+══════════════════ */
+.btn-google {
+  width: 100%; padding: 14px 16px; border-radius: 14px;
+  border: 2px solid #dadce0; background: #fff;
+  color: #3c4043; font-size: 15px; font-weight: 700; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  transition: background .15s, box-shadow .15s;
+}
+.btn-google:hover { background: #f8f8f8; box-shadow: 0 2px 8px rgba(0,0,0,.15); }
+.btn-google svg { width: 20px; height: 20px; flex-shrink: 0; }
+.google-divider {
+  width: 100%; display: flex; align-items: center; gap: 10px;
+  color: #7A9BB5; font-size: 12px; font-weight: 700; margin: 10px 0 6px;
+}
+.google-divider::before, .google-divider::after { content: ''; flex: 1; height: 1px; background: #1E3A52; }
+
+/* First-time setup overlay */
+#first-time-overlay {
+  display: none; position: fixed; inset: 0; z-index: 250;
+  background: #0D1B2A; flex-direction: column;
+  align-items: center; justify-content: center; padding: 32px 24px; gap: 14px;
+  overflow-y: auto;
+}
+#first-time-overlay.open { display: flex; }
+
+/* Auth loading overlay */
+#auth-loading {
+  display: none; position: fixed; inset: 0; z-index: 300;
+  background: #0D1B2A; flex-direction: column;
+  align-items: center; justify-content: center; gap: 14px;
+}
+#auth-loading.open { display: flex; }
+
+/* Signed-in badge on login screen */
+.signed-in-badge {
+  display: flex; align-items: center; gap: 8px;
+  background: rgba(88,204,2,.1); border: 1.5px solid rgba(88,204,2,.3);
+  border-radius: 12px; padding: 8px 14px;
+  font-size: 12px; font-weight: 700; color: #58CC02;
+  width: 100%; justify-content: center;
+}
+.btn-signout {
+  background: none; border: none; color: #7A9BB5;
+  font-size: 12px; font-weight: 700; cursor: pointer; text-decoration: underline;
+  padding: 0;
+}
 </style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 </head>
 <body>
 <div id="app">
@@ -526,14 +576,45 @@ textarea:focus { border-color: #1CB0F6; }
 <div id="login" class="screen active">
   <div class="logo">🌿 APES</div>
   <div class="logo-sub">AP Environmental Science Prep</div>
+
+  <!-- Google sign-in -->
+  <div id="google-signin-area" style="width:100%">
+    <button class="btn-google" onclick="handleGoogleSignIn()">
+      <svg viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.2l6.8-6.8C35.7 2.3 30.2 0 24 0 14.7 0 6.7 5.4 2.8 13.3l7.9 6.1C12.5 13 17.8 9.5 24 9.5z"/><path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v8.5h12.7c-.5 2.9-2.2 5.4-4.7 7l7.3 5.7c4.3-3.9 6.7-9.7 6.7-16.7z"/><path fill="#FBBC05" d="M10.7 28.6A14.5 14.5 0 0 1 9.5 24c0-1.6.3-3.2.7-4.6L2.3 13.3A23.9 23.9 0 0 0 0 24c0 3.8.9 7.4 2.5 10.6l8.2-6z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.3-5.7c-2.2 1.5-5 2.4-8.6 2.4-6.2 0-11.5-4.2-13.4-9.9l-8 6.2C6.7 42.6 14.7 48 24 48z"/></svg>
+      Sign in with Google
+    </button>
+    <div id="google-user-row" style="display:none; width:100%; flex-direction:column; align-items:center; gap:6px;">
+      <div class="signed-in-badge" id="google-badge">Signed in as …</div>
+      <button class="btn-signout" onclick="handleSignOut()">Sign out of Google</button>
+    </div>
+  </div>
+
+  <div class="google-divider">or use local profile</div>
   <div class="profile-list" id="profile-list"></div>
   <div class="divider">or create new profile</div>
-  <div class="new-form" id="new-form">
+  <div class="new-form open" id="new-form">
     <div class="avatar-row" id="avatar-row"></div>
     <input type="text" id="name-input" placeholder="Your name..." maxlength="20">
     <button class="btn-green" onclick="createProfile()">Start Learning →</button>
   </div>
-  <script>document.getElementById('new-form').classList.add('open');</script>
+</div>
+
+<!-- ══ AUTH LOADING OVERLAY ══ -->
+<div id="auth-loading">
+  <div class="spinner"></div>
+  <div class="spinner-text">Signing you in…</div>
+</div>
+
+<!-- ══ FIRST-TIME GOOGLE SETUP ══ -->
+<div id="first-time-overlay">
+  <div style="font-size:48px">👋</div>
+  <div style="font-size:22px;font-weight:900;color:#F0F4F8;text-align:center">Welcome! Set up your profile</div>
+  <div id="ft-email" style="font-size:13px;color:#7A9BB5;font-weight:600;margin-top:-6px"></div>
+  <div style="font-size:12px;font-weight:700;color:#7A9BB5;width:100%;text-align:left">Pick an avatar</div>
+  <div class="avatar-row" id="ft-avatar-row" style="width:100%;justify-content:flex-start"></div>
+  <input type="text" id="ft-name" placeholder="Your name…" maxlength="20" style="width:100%">
+  <button class="btn-green" onclick="saveFirstTimeProfile()">Start Learning →</button>
+  <button class="btn-signout" style="margin-top:4px" onclick="handleSignOut()">Cancel &amp; sign out</button>
 </div>
 
 <!-- ══ HOME ══ -->
@@ -971,6 +1052,171 @@ const PROMO_CODES = [
 ];
 
 // ════════════════════════════════════════
+// SUPABASE CONFIG
+// Replace these two values with your own from supabase.com → Project Settings → API
+// ════════════════════════════════════════
+const SUPABASE_URL      = 'YOUR_SUPABASE_URL';
+const SUPABASE_ANON_KEY = 'YOUR_SUPABASE_ANON_KEY';
+
+let _sb = null; // Supabase client instance
+
+function initSupabase() {
+  if (_sb) return true;
+  if (SUPABASE_URL === 'YOUR_SUPABASE_URL') return false; // not configured
+  try {
+    _sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    return true;
+  } catch(e) { console.warn('Supabase init failed', e); return false; }
+}
+
+// ── Google OAuth ─────────────────────────────────────────────
+async function handleGoogleSignIn() {
+  if (!initSupabase()) {
+    alert('Supabase is not configured yet. Ask your teacher to set it up, or use a local profile below.');
+    return;
+  }
+  const { error } = await _sb.auth.signInWithOAuth({
+    provider: 'google',
+    options: { redirectTo: window.location.href.split('?')[0].split('#')[0] }
+  });
+  if (error) alert('Sign-in failed: ' + error.message);
+}
+
+async function handleSignOut() {
+  if (_sb) await _sb.auth.signOut();
+  // Clear current Google profile from local state but keep data
+  P = null;
+  document.getElementById('first-time-overlay').classList.remove('open');
+  document.getElementById('google-user-row').style.display = 'none';
+  document.getElementById('google-signin-area').querySelector('.btn-google').style.display = 'flex';
+  show('login');
+  showNav(false);
+}
+
+// ── Session check (runs on every page load) ──────────────────
+async function checkSupabaseSession() {
+  if (!initSupabase()) return false;
+
+  document.getElementById('auth-loading').classList.add('open');
+
+  try {
+    const { data: { session } } = await _sb.auth.getSession();
+    if (!session) { document.getElementById('auth-loading').classList.remove('open'); return false; }
+
+    // Update Google badge on login screen
+    updateGoogleBadge(session.user.email);
+
+    // Look up existing profile
+    const { data: sp, error } = await _sb
+      .from('profiles')
+      .select('*')
+      .eq('google_id', session.user.id)
+      .maybeSingle();
+
+    document.getElementById('auth-loading').classList.remove('open');
+
+    if (error) { console.warn('Supabase profile lookup error', error); return false; }
+
+    if (sp) {
+      // Returning user — merge Supabase profile data into local profile
+      let p = Object.values(profiles).find(x => x.googleId === session.user.id);
+      if (!p) {
+        p = mkProfile(sp.name, sp.avatar);
+        p.id = session.user.id;
+        p.googleId = session.user.id;
+      } else {
+        p.name   = sp.name;
+        p.av     = sp.avatar;
+      }
+      // Pull XP/streak from whichever is higher (local wins if played offline)
+      if ((sp.xp || 0) > (p.xp || 0))    p.xp     = sp.xp;
+      if ((sp.streak || 0) > (p.streak || 0)) p.streak = sp.streak;
+      profiles[p.id] = p;
+      saveP(p);
+      login(p.id);
+      return true;
+    } else {
+      // First-time Google user — show profile setup
+      window._pendingSession = session;
+      renderFirstTimeAvatars();
+      document.getElementById('ft-email').textContent = session.user.email;
+      document.getElementById('first-time-overlay').classList.add('open');
+      return true;
+    }
+  } catch(e) {
+    console.warn('checkSupabaseSession error', e);
+    document.getElementById('auth-loading').classList.remove('open');
+    return false;
+  }
+}
+
+function updateGoogleBadge(email) {
+  const row = document.getElementById('google-user-row');
+  const badge = document.getElementById('google-badge');
+  const googleBtn = document.getElementById('google-signin-area').querySelector('.btn-google');
+  badge.textContent = 'Signed in as ' + email;
+  row.style.display = 'flex';
+  googleBtn.style.display = 'none';
+}
+
+// ── First-time profile save ───────────────────────────────────
+async function saveFirstTimeProfile() {
+  const name = document.getElementById('ft-name').value.trim();
+  if (!name) { document.getElementById('ft-name').focus(); return; }
+  const av = document.querySelector('#ft-avatar-row .av-opt.sel')?.dataset.a || '🌿';
+  const session = window._pendingSession;
+  if (!session || !_sb) return;
+
+  const btn = document.querySelector('#first-time-overlay .btn-green');
+  btn.disabled = true; btn.textContent = 'Saving…';
+
+  const { error } = await _sb.from('profiles').insert({
+    google_id: session.user.id,
+    email:     session.user.email,
+    name:      name,
+    avatar:    av,
+    xp:        0,
+    streak:    0
+  });
+
+  btn.disabled = false; btn.textContent = 'Start Learning →';
+
+  if (error) { alert('Could not save profile: ' + error.message); return; }
+
+  const p = mkProfile(name, av);
+  p.id       = session.user.id;
+  p.googleId = session.user.id;
+  profiles[p.id] = p;
+  saveP(p);
+  window._pendingSession = null;
+  document.getElementById('first-time-overlay').classList.remove('open');
+  login(p.id);
+}
+
+function renderFirstTimeAvatars() {
+  const row = document.getElementById('ft-avatar-row');
+  row.innerHTML = AVATARS.map((a, i) =>
+    `<div class="av-opt${i===0?' sel':''}" data-a="${a}" onclick="ftPickAv(this)">${a}</div>`
+  ).join('');
+}
+function ftPickAv(el) {
+  document.querySelectorAll('#ft-avatar-row .av-opt').forEach(e => e.classList.remove('sel'));
+  el.classList.add('sel');
+}
+
+// ── Supabase profile sync (best-effort, non-blocking) ─────────
+async function syncToSupabase(p) {
+  if (!_sb || !p.googleId) return;
+  await _sb.from('profiles').upsert({
+    google_id: p.googleId,
+    name:      p.name,
+    avatar:    p.av,
+    xp:        p.xp,
+    streak:    p.streak
+  }, { onConflict: 'google_id' });
+}
+
+// ════════════════════════════════════════
 // STATE
 // ════════════════════════════════════════
 let P = null;           // current profile
@@ -1021,15 +1267,17 @@ function mkProfile(name, av) {
   };
 }
 function today() { return new Date().toDateString(); }
-function saveC() { profiles[P.id] = P; saveP(P); }
+function saveC() { profiles[P.id] = P; saveP(P); syncToSupabase(P); }
 
 // ════════════════════════════════════════
 // LOGIN
 // ════════════════════════════════════════
-function initApp() {
+async function initApp() {
   profiles = loadProfiles();
   renderAvatars();
   renderProfileList();
+  // Check for active Supabase session (handles OAuth redirect returns too)
+  await checkSupabaseSession();
 }
 function renderAvatars() {
   const row = document.getElementById('avatar-row');
@@ -1038,7 +1286,7 @@ function renderAvatars() {
   ).join('');
 }
 function pickAv(el) {
-  document.querySelectorAll('.av-opt').forEach(e => e.classList.remove('sel'));
+  document.querySelectorAll('#avatar-row .av-opt').forEach(e => e.classList.remove('sel'));
   el.classList.add('sel');
 }
 function renderProfileList() {
@@ -1969,7 +2217,7 @@ function redeemCode() {
 // Force hide all screens on load before JS kicks in
 document.querySelectorAll('.screen').forEach(s => s.style.display = 'none');
 document.getElementById('bottom-nav').style.display = 'none';
-initApp();
+initApp(); // async — handles Supabase session check internally
 checkStripeReturn();
 </script>
 </body>
