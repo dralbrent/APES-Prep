@@ -1053,26 +1053,91 @@ const PROMO_CODES = [
 
 // ════════════════════════════════════════
 // SUPABASE CONFIG
-// Replace these two values with your own from supabase.com → Project Settings → API
 // ════════════════════════════════════════
 const SUPABASE_URL      = 'https://jmerfsuiuuplvikiaoue.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_-ViFhL4Eqow3hOUwF5eXnQ_dPOOG5zf';
 
-let _sb = null; // Supabase client instance
+let _sb = null;
+let _syncTimer = null;
+const SYNC_DEBOUNCE_MS = 2000; // wait 2s after last save before pushing to Supabase
 
 function initSupabase() {
   if (_sb) return true;
-  if (SUPABASE_URL === 'YOUR_SUPABASE_URL') return false; // not configured
+  if (SUPABASE_URL === 'YOUR_SUPABASE_URL') return false;
   try {
     _sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
     return true;
   } catch(e) { console.warn('Supabase init failed', e); return false; }
 }
 
+// ── Profile ↔ Supabase row conversion ────────────────────────
+function profileToRow(p) {
+  return {
+    id:               p.googleId,
+    name:             p.name             || '',
+    avatar:           p.av               || '🌿',
+    xp:               p.xp              || 0,
+    streak:           p.streak          || 0,
+    last_study_date:  p.lastDay         || null,
+    last_card_date:   p.lastCardDay     || null,
+    daily_goal_today: p.goalToday       || 0,
+    cards_today:      p.cardsToday      || 0,
+    week_days:        p.week   || [false,false,false,false,false,false,false],
+    unit_stats:       p.units  || {},
+    wrong_cards:      p.wrong  || [],
+    sr_map:           p.sr     || {},
+    is_plus:          p.plus   || false,
+    promo_code:       p.promoCode || null,
+  };
+}
+
+// Merge a local profile with a remote Supabase row.
+// For every field, take the "richer" value so offline play is never lost.
+function mergeRemote(local, remote) {
+  const m = { ...local };
+
+  // Numerics — take max
+  m.xp     = Math.max(local.xp     || 0, remote.xp     || 0);
+  m.streak = Math.max(local.streak || 0, remote.streak || 0);
+
+  // Plus — once unlocked anywhere, unlocked everywhere
+  m.plus = (local.plus || false) || (remote.is_plus || false);
+  if (remote.promo_code && !m.promoCode) m.promoCode = remote.promo_code;
+
+  // Name / avatar — keep local if already set, else take remote
+  if (!m.name) m.name = remote.name;
+  if (!m.av)   m.av   = remote.avatar;
+
+  // Unit mastery — max per unit
+  const ru = remote.unit_stats || {};
+  const mu = { ...(local.units || {}) };
+  for (const k of Object.keys(ru)) mu[k] = Math.max(mu[k] || 0, ru[k] || 0);
+  m.units = mu;
+
+  // Wrong-cards list — keep the longer one (more tracked = more complete)
+  const rw = remote.wrong_cards || [];
+  if (rw.length > (local.wrong || []).length) m.wrong = rw;
+
+  // SR map — merge, prefer the higher (more-reviewed) value per key
+  const rs = remote.sr_map || {};
+  const ms = { ...(local.sr || {}) };
+  for (const k of Object.keys(rs)) {
+    if (!ms[k] || rs[k] > ms[k]) ms[k] = rs[k];
+  }
+  m.sr = ms;
+
+  // Week streak dots — OR each day (studied on either device counts)
+  const rk = remote.week_days || [false,false,false,false,false,false,false];
+  m.week = (local.week || [false,false,false,false,false,false,false])
+    .map((v, i) => v || rk[i] || false);
+
+  return m;
+}
+
 // ── Google OAuth ─────────────────────────────────────────────
 async function handleGoogleSignIn() {
   if (!initSupabase()) {
-    alert('Supabase is not configured yet. Ask your teacher to set it up, or use a local profile below.');
+    alert('Supabase is not configured yet. Use a local profile below.');
     return;
   }
   const { error } = await _sb.auth.signInWithOAuth({
@@ -1084,7 +1149,6 @@ async function handleGoogleSignIn() {
 
 async function handleSignOut() {
   if (_sb) await _sb.auth.signOut();
-  // Clear current Google profile from local state but keep data
   P = null;
   document.getElementById('first-time-overlay').classList.remove('open');
   document.getElementById('google-user-row').style.display = 'none';
@@ -1093,7 +1157,7 @@ async function handleSignOut() {
   showNav(false);
 }
 
-// ── Session check (runs on every page load) ──────────────────
+// ── Session check — runs on every page load ───────────────────
 async function checkSupabaseSession() {
   if (!initSupabase()) return false;
 
@@ -1101,16 +1165,17 @@ async function checkSupabaseSession() {
 
   try {
     const { data: { session } } = await _sb.auth.getSession();
-    if (!session) { document.getElementById('auth-loading').classList.remove('open'); return false; }
+    if (!session) {
+      document.getElementById('auth-loading').classList.remove('open');
+      return false;
+    }
 
-    // Update Google badge on login screen
     updateGoogleBadge(session.user.email);
 
-    // Look up existing profile
     const { data: sp, error } = await _sb
       .from('profiles')
       .select('*')
-      .eq('google_id', session.user.id)
+      .eq('id', session.user.id)
       .maybeSingle();
 
     document.getElementById('auth-loading').classList.remove('open');
@@ -1118,25 +1183,24 @@ async function checkSupabaseSession() {
     if (error) { console.warn('Supabase profile lookup error', error); return false; }
 
     if (sp) {
-      // Returning user — merge Supabase profile data into local profile
-      let p = Object.values(profiles).find(x => x.googleId === session.user.id);
-      if (!p) {
-        p = mkProfile(sp.name, sp.avatar);
-        p.id = session.user.id;
-        p.googleId = session.user.id;
-      } else {
-        p.name   = sp.name;
-        p.av     = sp.avatar;
+      // Returning user — merge remote data with any offline progress
+      let local = Object.values(profiles).find(x => x.googleId === session.user.id);
+      if (!local) {
+        local = mkProfile(sp.name, sp.avatar);
+        local.id       = session.user.id;
+        local.googleId = session.user.id;
       }
-      // Pull XP/streak from whichever is higher (local wins if played offline)
-      if ((sp.xp || 0) > (p.xp || 0))    p.xp     = sp.xp;
-      if ((sp.streak || 0) > (p.streak || 0)) p.streak = sp.streak;
-      profiles[p.id] = p;
-      saveP(p);
-      login(p.id);
+      const merged = mergeRemote(local, sp);
+      merged.id       = session.user.id;
+      merged.googleId = session.user.id;
+      profiles[merged.id] = merged;
+      saveP(merged);
+      // Push the reconciled state back immediately
+      await syncToSupabaseNow(merged);
+      login(merged.id);
       return true;
     } else {
-      // First-time Google user — show profile setup
+      // First-time Google user — show name + avatar picker
       window._pendingSession = session;
       renderFirstTimeAvatars();
       document.getElementById('ft-email').textContent = session.user.email;
@@ -1144,50 +1208,51 @@ async function checkSupabaseSession() {
       return true;
     }
   } catch(e) {
-    console.warn('checkSupabaseSession error', e);
+    // Network error / offline — fall back to cached local profile
+    console.warn('Supabase session check failed (offline?)', e);
     document.getElementById('auth-loading').classList.remove('open');
+    const cachedId = localStorage.getItem('apes_last_google_id');
+    if (cachedId && profiles[cachedId]) {
+      localStorage.setItem('apes_sync_pending', '1');
+      login(cachedId);
+      return true;
+    }
     return false;
   }
 }
 
 function updateGoogleBadge(email) {
-  const row = document.getElementById('google-user-row');
-  const badge = document.getElementById('google-badge');
+  const row       = document.getElementById('google-user-row');
+  const badge     = document.getElementById('google-badge');
   const googleBtn = document.getElementById('google-signin-area').querySelector('.btn-google');
-  badge.textContent = 'Signed in as ' + email;
-  row.style.display = 'flex';
+  badge.textContent      = 'Signed in as ' + email;
+  row.style.display      = 'flex';
   googleBtn.style.display = 'none';
 }
 
-// ── First-time profile save ───────────────────────────────────
+// ── First-time profile setup ──────────────────────────────────
 async function saveFirstTimeProfile() {
   const name = document.getElementById('ft-name').value.trim();
   if (!name) { document.getElementById('ft-name').focus(); return; }
-  const av = document.querySelector('#ft-avatar-row .av-opt.sel')?.dataset.a || '🌿';
+  const av      = document.querySelector('#ft-avatar-row .av-opt.sel')?.dataset.a || '🌿';
   const session = window._pendingSession;
   if (!session || !_sb) return;
 
   const btn = document.querySelector('#first-time-overlay .btn-green');
   btn.disabled = true; btn.textContent = 'Saving…';
 
-  const { error } = await _sb.from('profiles').insert({
-    google_id: session.user.id,
-    email:     session.user.email,
-    name:      name,
-    avatar:    av,
-    xp:        0,
-    streak:    0
-  });
+  const p       = mkProfile(name, av);
+  p.id          = session.user.id;
+  p.googleId    = session.user.id;
+
+  const { error } = await _sb.from('profiles').insert(profileToRow(p));
 
   btn.disabled = false; btn.textContent = 'Start Learning →';
-
   if (error) { alert('Could not save profile: ' + error.message); return; }
 
-  const p = mkProfile(name, av);
-  p.id       = session.user.id;
-  p.googleId = session.user.id;
   profiles[p.id] = p;
   saveP(p);
+  localStorage.setItem('apes_last_google_id', p.id);
   window._pendingSession = null;
   document.getElementById('first-time-overlay').classList.remove('open');
   login(p.id);
@@ -1204,16 +1269,28 @@ function ftPickAv(el) {
   el.classList.add('sel');
 }
 
-// ── Supabase profile sync (best-effort, non-blocking) ─────────
-async function syncToSupabase(p) {
+// ── Sync to Supabase — debounced, offline-resilient ───────────
+// Called by saveC() on every profile change.
+// Writes localStorage immediately; Supabase write is debounced 2 s.
+function syncToSupabase(p) {
   if (!_sb || !p.googleId) return;
-  await _sb.from('profiles').upsert({
-    google_id: p.googleId,
-    name:      p.name,
-    avatar:    p.av,
-    xp:        p.xp,
-    streak:    p.streak
-  }, { onConflict: 'google_id' });
+  clearTimeout(_syncTimer);
+  _syncTimer = setTimeout(() => syncToSupabaseNow(p), SYNC_DEBOUNCE_MS);
+}
+
+async function syncToSupabaseNow(p) {
+  if (!_sb || !p.googleId) return;
+  try {
+    const { error } = await _sb
+      .from('profiles')
+      .upsert(profileToRow(p), { onConflict: 'id' });
+    if (error) throw error;
+    localStorage.removeItem('apes_sync_pending');
+    localStorage.setItem('apes_last_google_id', p.id);
+  } catch(e) {
+    console.warn('Supabase sync failed — will retry next session', e);
+    localStorage.setItem('apes_sync_pending', '1');
+  }
 }
 
 // ════════════════════════════════════════
