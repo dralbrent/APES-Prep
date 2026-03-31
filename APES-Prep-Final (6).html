@@ -567,7 +567,7 @@ textarea:focus { border-color: #1CB0F6; }
   padding: 0;
 }
 </style>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js/dist/umd/supabase.js"></script>
 </head>
 <body>
 <div id="app">
@@ -1165,6 +1165,7 @@ async function checkSupabaseSession() {
 
   try {
     const { data: { session } } = await _sb.auth.getSession();
+    console.log('[APES] session:', session ? session.user.email : 'none');
     if (!session) {
       document.getElementById('auth-loading').classList.remove('open');
       return false;
@@ -1178,6 +1179,7 @@ async function checkSupabaseSession() {
       .eq('id', session.user.id)
       .maybeSingle();
 
+    console.log('[APES] profile lookup → data:', sp, 'error:', error);
     document.getElementById('auth-loading').classList.remove('open');
 
     if (error) { console.warn('Supabase profile lookup error', error); return false; }
@@ -1245,7 +1247,8 @@ async function saveFirstTimeProfile() {
   p.id          = session.user.id;
   p.googleId    = session.user.id;
 
-  const { error } = await _sb.from('profiles').insert(profileToRow(p));
+  const { error } = await _sb.from('profiles').upsert(profileToRow(p), { onConflict: 'id' });
+  console.log('[APES] first-time profile upsert error:', error);
 
   btn.disabled = false; btn.textContent = 'Start Learning →';
   if (error) { alert('Could not save profile: ' + error.message); return; }
